@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { StyleSheet, Pressable, Platform } from 'react-native';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import * as DocumentPicker from 'expo-document-picker';
+import Slider from '@react-native-community/slider';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -15,6 +16,7 @@ import Animated, {
 import { Text, View } from '@/components/Themed';
 
 const NUM_BARS = 20;
+const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 function useBarHeights() {
   const b0 = useSharedValue(10);
@@ -42,14 +44,18 @@ function useBarHeights() {
 
 export default function VisualizerScreen() {
   const [fileName, setFileName] = useState<string | null>(null);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [seekValue, setSeekValue] = useState(0);
+  const [speedIndex, setSpeedIndex] = useState(2); // default 1x
+  const [volume, setVolume] = useState(1);
 
-  const player = useAudioPlayer(null);
+  const player = useAudioPlayer(null, { updateInterval: 200 });
   const status = useAudioPlayerStatus(player);
   const barHeights = useBarHeights();
 
   const isPlaying = status.playing;
 
-  const animateBars = () => {
+  const animateBars = useCallback(() => {
     barHeights.forEach((bar) => {
       const randomHeight = Math.random() * 120 + 20;
       const randomDuration = Math.random() * 300 + 150;
@@ -68,13 +74,13 @@ export default function VisualizerScreen() {
         true
       );
     });
-  };
+  }, [barHeights]);
 
-  const stopBars = () => {
+  const stopBars = useCallback(() => {
     barHeights.forEach((bar) => {
       bar.value = withTiming(10, { duration: 400 });
     });
-  };
+  }, [barHeights]);
 
   const pickAudio = async () => {
     try {
@@ -88,6 +94,8 @@ export default function VisualizerScreen() {
       const file = result.assets[0];
       setFileName(file.name);
       player.replace({ uri: file.uri });
+      setSpeedIndex(2);
+      player.playbackRate = 1;
     } catch (error) {
       console.error('Error picking audio:', error);
     }
@@ -106,11 +114,35 @@ export default function VisualizerScreen() {
     }
   };
 
+  const onSeekStart = () => {
+    setIsSeeking(true);
+    setSeekValue(status.currentTime);
+  };
+
+  const onSeekComplete = (value: number) => {
+    player.seekTo(value);
+    setIsSeeking(false);
+  };
+
+  const cycleSpeed = () => {
+    const nextIndex = (speedIndex + 1) % PLAYBACK_SPEEDS.length;
+    setSpeedIndex(nextIndex);
+    player.playbackRate = PLAYBACK_SPEEDS[nextIndex];
+  };
+
+  const onVolumeChange = (value: number) => {
+    setVolume(value);
+    player.volume = value;
+  };
+
   const formatTime = (seconds: number) => {
+    if (!seconds || !isFinite(seconds)) return '0:00';
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
+
+  const currentTime = isSeeking ? seekValue : status.currentTime;
 
   return (
     <View style={styles.container}>
@@ -122,30 +154,81 @@ export default function VisualizerScreen() {
         ))}
       </View>
 
-      {fileName && (
-        <View style={styles.trackInfo}>
-          <Text style={styles.fileName} numberOfLines={1}>
-            {fileName}
-          </Text>
-          <Text style={styles.time}>
-            {formatTime(status.currentTime)} / {formatTime(status.duration)}
+      {fileName ? (
+        <>
+          <View style={styles.trackInfo}>
+            <Text style={styles.fileName} numberOfLines={1}>
+              {fileName}
+            </Text>
+          </View>
+
+          <View style={styles.seekContainer}>
+            <Text style={styles.time}>{formatTime(currentTime)}</Text>
+            <Slider
+              style={styles.seekBar}
+              minimumValue={0}
+              maximumValue={status.duration > 0 ? status.duration : 1}
+              value={currentTime}
+              onSlidingStart={onSeekStart}
+              onValueChange={(v) => setSeekValue(v)}
+              onSlidingComplete={onSeekComplete}
+              minimumTrackTintColor="#2f95dc"
+              maximumTrackTintColor="#555"
+              thumbTintColor="#2f95dc"
+            />
+            <Text style={styles.time}>{formatTime(status.duration)}</Text>
+          </View>
+
+          <View style={styles.controls}>
+            <Pressable style={styles.controlButton} onPress={cycleSpeed}>
+              <Text style={styles.controlButtonText}>
+                {PLAYBACK_SPEEDS[speedIndex]}x
+              </Text>
+            </Pressable>
+
+            <Pressable style={styles.playButton} onPress={togglePlayPause}>
+              <Text style={styles.playButtonText}>
+                {isPlaying ? '⏸' : '▶'}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={styles.controlButton}
+              onPress={() => onVolumeChange(volume > 0 ? 0 : 1)}
+            >
+              <Text style={styles.controlButtonText}>
+                {volume === 0 ? '🔇' : volume < 0.5 ? '🔉' : '🔊'}
+              </Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.volumeContainer}>
+            <Text style={styles.volumeLabel}>Volume</Text>
+            <Slider
+              style={styles.volumeBar}
+              minimumValue={0}
+              maximumValue={1}
+              value={volume}
+              onValueChange={onVolumeChange}
+              minimumTrackTintColor="#2f95dc"
+              maximumTrackTintColor="#555"
+              thumbTintColor="#2f95dc"
+            />
+          </View>
+        </>
+      ) : (
+        <View style={styles.placeholder}>
+          <Text style={styles.placeholderText}>
+            Pick an audio file to start
           </Text>
         </View>
       )}
 
-      <View style={styles.controls}>
-        <Pressable style={styles.button} onPress={pickAudio}>
-          <Text style={styles.buttonText}>Pick Audio File</Text>
-        </Pressable>
-
-        {fileName && (
-          <Pressable style={styles.button} onPress={togglePlayPause}>
-            <Text style={styles.buttonText}>
-              {isPlaying ? 'Pause' : 'Play'}
-            </Text>
-          </Pressable>
-        )}
-      </View>
+      <Pressable style={styles.pickButton} onPress={pickAudio}>
+        <Text style={styles.pickButtonText}>
+          {fileName ? 'Change Audio File' : 'Pick Audio File'}
+        </Text>
+      </Pressable>
     </View>
   );
 }
@@ -184,7 +267,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 40,
+    marginBottom: 30,
   },
   visualizerContainer: {
     flexDirection: 'row',
@@ -192,7 +275,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     height: 160,
     gap: 4,
-    marginBottom: 30,
+    marginBottom: 24,
     backgroundColor: 'transparent',
   },
   bar: {
@@ -202,31 +285,95 @@ const styles = StyleSheet.create({
   },
   trackInfo: {
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 8,
     backgroundColor: 'transparent',
   },
   fileName: {
     fontSize: 14,
     opacity: 0.8,
-    maxWidth: 250,
+    maxWidth: 280,
+  },
+  seekContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 16,
+    backgroundColor: 'transparent',
+  },
+  seekBar: {
+    flex: 1,
+    height: 40,
+    marginHorizontal: 8,
   },
   time: {
-    fontSize: 16,
+    fontSize: 13,
     fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
-    marginTop: 4,
+    minWidth: 40,
+    textAlign: 'center',
   },
   controls: {
     flexDirection: 'row',
-    gap: 12,
+    alignItems: 'center',
+    gap: 20,
+    marginBottom: 16,
     backgroundColor: 'transparent',
   },
-  button: {
+  playButton: {
+    backgroundColor: '#2f95dc',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  playButtonText: {
+    fontSize: 22,
+    color: '#fff',
+  },
+  controlButton: {
+    backgroundColor: 'rgba(47, 149, 220, 0.15)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    minWidth: 48,
+    alignItems: 'center',
+  },
+  controlButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2f95dc',
+  },
+  volumeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '80%',
+    marginBottom: 20,
+    backgroundColor: 'transparent',
+  },
+  volumeLabel: {
+    fontSize: 13,
+    opacity: 0.6,
+    marginRight: 8,
+  },
+  volumeBar: {
+    flex: 1,
+    height: 32,
+  },
+  placeholder: {
+    marginBottom: 20,
+    backgroundColor: 'transparent',
+  },
+  placeholderText: {
+    fontSize: 16,
+    opacity: 0.5,
+  },
+  pickButton: {
     backgroundColor: '#2f95dc',
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderRadius: 10,
   },
-  buttonText: {
+  pickButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
