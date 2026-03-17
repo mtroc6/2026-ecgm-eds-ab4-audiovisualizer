@@ -22,4 +22,4 @@
 **Sprint 2** — Build core audio visualizer features:
 - Baseline MVP: audio file picker, playback, and bar visualizer (PR #5, issue #2)
 - Audio playback controls with seek bar, volume, and speed (PR #6, issue #3)
-- Real-time waveform visualizer with frequency bands and color themes (PR #7, issue #4)
+- Real-time waveform visualizer with frequency bands and color themes (PR #7, PR #8, issue #4)
