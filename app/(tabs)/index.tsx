@@ -1,19 +1,17 @@
-import { useState, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { StyleSheet, Pressable, Platform, View as RNView } from 'react-native';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import * as DocumentPicker from 'expo-document-picker';
 import Slider from '@react-native-community/slider';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
-  withRepeat,
-  withSequence,
   Easing,
   type SharedValue,
 } from 'react-native-reanimated';
 
 import { Text, View } from '@/components/Themed';
+import { useAudioEngine } from '@/hooks/useAudioEngine';
 
 const NUM_BARS = 20;
 const WAVEFORM_BARS = 40;
@@ -24,7 +22,6 @@ type VisMode = 'bars' | 'waveform' | 'circular';
 type ColorScheme = 'black' | 'blue' | 'colorful';
 
 // ─── Color scheme logic ────────────────────────────────────────────────────
-// intensity: 0..1 (based on simulated "volume" / bar height ratio)
 function getBarColor(
   scheme: ColorScheme,
   index: number,
@@ -33,17 +30,13 @@ function getBarColor(
 ): string {
   switch (scheme) {
     case 'black':
-      // White → grey depending on intensity
       const lightness = Math.round(30 + intensity * 60);
       return `hsl(0, 0%, ${lightness}%)`;
     case 'blue':
-      // Light blue → deep blue depending on intensity
       const blueLightness = Math.round(35 + intensity * 40);
       const blueSat = Math.round(60 + intensity * 30);
       return `hsl(210, ${blueSat}%, ${blueLightness}%)`;
     case 'colorful':
-      // Hue shifts from bass (cyan) → mid (purple/pink) → treble (red/orange)
-      // Brightness increases with intensity
       const hue = (index / total) * 260 + 180;
       const colLightness = Math.round(35 + intensity * 35);
       return `hsl(${hue}, 90%, ${colLightness}%)`;
@@ -67,14 +60,6 @@ const COLOR_SCHEME_LABELS: Record<ColorScheme, string> = {
   colorful: '🌈 Color',
 };
 const COLOR_SCHEME_KEYS: ColorScheme[] = ['black', 'blue', 'colorful'];
-
-// ─── Band helper ───────────────────────────────────────────────────────────
-function getBand(index: number, total: number): 'bass' | 'mid' | 'treble' {
-  const third = total / 3;
-  if (index < third) return 'bass';
-  if (index < third * 2) return 'mid';
-  return 'treble';
-}
 
 // ─── Waveform shape generator ──────────────────────────────────────────────
 function generateWaveformShape(count: number): number[] {
@@ -137,7 +122,6 @@ function Bar({
 }
 
 // ─── Waveform Display ──────────────────────────────────────────────────────
-// Bars are static (never re-render). Only the Animated playhead moves.
 function WaveformDisplay({
   waveShape,
   progress,
@@ -153,7 +137,6 @@ function WaveformDisplay({
   const GAP = 5;
   const totalWidth = waveShape.length * (BAR_WIDTH + GAP);
 
-  // Animated playhead position — only this moves, bars stay static
   const playheadX = useSharedValue(0);
   playheadX.value = withTiming(progress * totalWidth, { duration: 120, easing: Easing.linear });
 
@@ -173,7 +156,6 @@ function WaveformDisplay({
       {waveShape.map((amp, i) => {
         const barH = Math.max(4, amp * WAVEFORM_HEIGHT);
         const fraction = i / waveShape.length;
-        // Color is fixed at render time — no re-render needed
         let barColor: string;
         if (scheme === 'black') {
           barColor = `hsl(0, 0%, ${Math.round(30 + amp * 50)}%)`;
@@ -181,8 +163,8 @@ function WaveformDisplay({
           barColor = `hsl(210, 80%, ${Math.round(35 + amp * 35)}%)`;
         } else {
           const hue = Math.round(220 - amp * 220);
-          const lightness = Math.round(45 + amp * 20);
-          barColor = `hsl(${hue}, 85%, ${lightness}%)`;
+          const colLightness = Math.round(45 + amp * 20);
+          barColor = `hsl(${hue}, 85%, ${colLightness}%)`;
         }
         return (
           <View
@@ -199,7 +181,6 @@ function WaveformDisplay({
           />
         );
       })}
-      {/* Animated playhead — runs on UI thread, no lag */}
       <Animated.View style={playheadStyle} />
     </View>
   );
@@ -218,23 +199,23 @@ function CircularBar({
   scheme: ColorScheme;
 }) {
   const angle = (index / total) * 2 * Math.PI;
-  const RADIUS = 72;
-  const cx = 110 + RADIUS * Math.cos(angle - Math.PI / 2);
-  const cy = 110 + RADIUS * Math.sin(angle - Math.PI / 2);
+  const RADIUS = 90;
+  const cx = 140 + RADIUS * Math.cos(angle - Math.PI / 2);
+  const cy = 140 + RADIUS * Math.sin(angle - Math.PI / 2);
 
   const animatedStyle = useAnimatedStyle(() => {
     const intensity = Math.min(1, height.value / 150);
     const len = height.value * 0.45 + 8;
     return {
       position: 'absolute' as const,
-      width: 6,
+      width: 8,
       height: len,
-      borderRadius: 3,
+      borderRadius: 4,
       backgroundColor: getBarColor(scheme, index, total, intensity),
-      left: cx - 3,
+      left: cx - 4,
       top: cy - len,
       transform: [{ rotate: `${(angle * 180) / Math.PI}deg` }],
-      transformOrigin: `3px ${len}px`,
+      transformOrigin: `4px ${len}px`,
     };
   });
 
@@ -250,41 +231,38 @@ export default function VisualizerScreen() {
   const [volume, setVolume] = useState(1);
   const [visMode, setVisMode] = useState<VisMode>('bars');
   const [colorScheme, setColorScheme] = useState<ColorScheme>('colorful');
-  const [waveShape] = useState<number[]>(() => generateWaveformShape(WAVEFORM_BARS));
   const [waveKey, setWaveKey] = useState(0);
   const [waveShapes, setWaveShapes] = useState<number[][]>([generateWaveformShape(WAVEFORM_BARS)]);
 
-  const player = useAudioPlayer(null, { updateInterval: 100 });
-  const status = useAudioPlayerStatus(player);
+  const engine = useAudioEngine();
   const barHeights = useBarHeights();
-  const isPlaying = status.playing;
+  const rafRef = useRef<number>(0);
 
-  const currentTime = isSeeking ? seekValue : status.currentTime;
-  const progress = status.duration > 0 ? currentTime / status.duration : 0;
+  const isPlaying = engine.isPlaying;
+  const currentTime = isSeeking ? seekValue : engine.currentTime;
+  const progress = engine.duration > 0 ? currentTime / engine.duration : 0;
 
-  const animateBars = useCallback(() => {
-    barHeights.forEach((bar, i) => {
-      const band = getBand(i, NUM_BARS);
-      const maxH = band === 'bass' ? 150 : band === 'mid' ? 120 : 80;
-      const minDur = band === 'bass' ? 280 : band === 'mid' ? 180 : 90;
-      const randomHeight = Math.random() * maxH + 20;
-      const randomDuration = Math.random() * 200 + minDur;
-      bar.value = withRepeat(
-        withSequence(
-          withTiming(randomHeight, { duration: randomDuration, easing: Easing.inOut(Easing.ease) }),
-          withTiming(Math.random() * 40 + 10, { duration: randomDuration, easing: Easing.inOut(Easing.ease) })
-        ),
-        -1,
-        true
-      );
-    });
-  }, [barHeights]);
+  // ── Sync FFT frequency data → reanimated shared values ──
+  useEffect(() => {
+    const update = () => {
+      const data = engine.frequencyDataRef.current;
+      for (let i = 0; i < barHeights.length; i++) {
+        const value = data[i] ?? 0;
+        // Scale 0-255 → bar pixel height (10..170)
+        barHeights[i].value = value * 0.63 + 10;
+      }
+      rafRef.current = requestAnimationFrame(update);
+    };
 
-  const stopBars = useCallback(() => {
-    barHeights.forEach((bar) => {
-      bar.value = withTiming(10, { duration: 400 });
-    });
-  }, [barHeights]);
+    if (isPlaying) {
+      rafRef.current = requestAnimationFrame(update);
+    } else {
+      for (const bar of barHeights) {
+        bar.value = withTiming(10, { duration: 400 });
+      }
+    }
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [isPlaying, barHeights, engine.frequencyDataRef]);
 
   const pickAudio = async () => {
     try {
@@ -292,9 +270,9 @@ export default function VisualizerScreen() {
       if (result.canceled) return;
       const file = result.assets[0];
       setFileName(file.name);
-      player.replace({ uri: file.uri });
+      engine.loadAudio(file.uri);
       setSpeedIndex(2);
-      player.playbackRate = 1;
+      engine.setPlaybackRate(1);
       setWaveShapes([generateWaveformShape(WAVEFORM_BARS)]);
       setWaveKey(k => k + 1);
     } catch (error) {
@@ -304,23 +282,21 @@ export default function VisualizerScreen() {
 
   const togglePlayPause = () => {
     if (isPlaying) {
-      player.pause();
-      stopBars();
+      engine.pause();
     } else {
-      if (status.currentTime >= status.duration && status.duration > 0) player.seekTo(0);
-      player.play();
-      animateBars();
+      if (engine.currentTime >= engine.duration && engine.duration > 0) engine.seekTo(0);
+      engine.play();
     }
   };
 
-  const onSeekStart = () => { setIsSeeking(true); setSeekValue(status.currentTime); };
-  const onSeekComplete = (value: number) => { player.seekTo(value); setIsSeeking(false); };
+  const onSeekStart = () => { setIsSeeking(true); setSeekValue(engine.currentTime); };
+  const onSeekComplete = (value: number) => { engine.seekTo(value); setIsSeeking(false); };
   const cycleSpeed = () => {
     const nextIndex = (speedIndex + 1) % PLAYBACK_SPEEDS.length;
     setSpeedIndex(nextIndex);
-    player.playbackRate = PLAYBACK_SPEEDS[nextIndex];
+    engine.setPlaybackRate(PLAYBACK_SPEEDS[nextIndex]);
   };
-  const onVolumeChange = (value: number) => { setVolume(value); player.volume = value; };
+  const onVolumeChange = (value: number) => { setVolume(value); engine.setVolume(value); };
   const cycleColorScheme = () => {
     const idx = COLOR_SCHEME_KEYS.indexOf(colorScheme);
     setColorScheme(COLOR_SCHEME_KEYS[(idx + 1) % COLOR_SCHEME_KEYS.length]);
@@ -339,6 +315,14 @@ export default function VisualizerScreen() {
     <View style={styles.container}>
       <Text style={styles.title}>Audio Visualizer</Text>
 
+      {/* ── BPM display ── */}
+      {engine.bpm > 0 && (
+        <View style={styles.bpmContainer}>
+          <Text style={styles.bpmValue}>{engine.bpm}</Text>
+          <Text style={styles.bpmLabel}>BPM</Text>
+        </View>
+      )}
+
       {/* ── Frequency band labels ── */}
       <View style={styles.bandLabels}>
         <Text style={[styles.bandLabel, { color: getBandColor(colorScheme, 'bass', 0.8) }]}>BASS</Text>
@@ -350,7 +334,7 @@ export default function VisualizerScreen() {
       {visMode === 'bars' && (
         <View style={styles.visualizerContainer}>
           {barHeights.map((height, index) => (
-            <Bar key={index} height={height} index={index} scheme={colorScheme} maxHeight={150} />
+            <Bar key={index} height={height} index={index} scheme={colorScheme} maxHeight={170} />
           ))}
         </View>
       )}
@@ -378,7 +362,6 @@ export default function VisualizerScreen() {
               scheme={colorScheme}
             />
           ))}
-          {/* Center dot */}
           <RNView
             style={[
               styles.circularCenter,
@@ -388,7 +371,7 @@ export default function VisualizerScreen() {
         </RNView>
       )}
 
-      {/* ── Mode buttons — centered below visualizer ── */}
+      {/* ── Mode buttons ── */}
       <View style={styles.modeSwitchRow}>
         {(['bars', 'waveform', 'circular'] as VisMode[]).map((mode) => (
           <Pressable
@@ -403,7 +386,7 @@ export default function VisualizerScreen() {
         ))}
       </View>
 
-      {/* ── Color button — centered below mode buttons ── */}
+      {/* ── Color button ── */}
       <View style={styles.colorRow}>
         <Pressable style={styles.colorButton} onPress={cycleColorScheme}>
           <Text style={styles.colorButtonText}>{COLOR_SCHEME_LABELS[colorScheme]}</Text>
@@ -422,7 +405,7 @@ export default function VisualizerScreen() {
             <Slider
               style={styles.seekBar}
               minimumValue={0}
-              maximumValue={status.duration > 0 ? status.duration : 1}
+              maximumValue={engine.duration > 0 ? engine.duration : 1}
               value={currentTime}
               onSlidingStart={onSeekStart}
               onValueChange={(v) => setSeekValue(v)}
@@ -431,7 +414,7 @@ export default function VisualizerScreen() {
               maximumTrackTintColor="#555"
               thumbTintColor="#2f95dc"
             />
-            <Text style={styles.time}>{formatTime(status.duration)}</Text>
+            <Text style={styles.time}>{formatTime(engine.duration)}</Text>
           </View>
 
           <View style={styles.controls}>
@@ -477,10 +460,32 @@ export default function VisualizerScreen() {
 
 // ─── Styles ────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
-  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 14 },
+  container: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, maxWidth: 520, width: '100%', alignSelf: 'center' },
+  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 6 },
 
-  // Mode buttons row — centered below visualizer
+  // BPM display
+  bpmContainer: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+    marginBottom: 8,
+    backgroundColor: 'transparent',
+  },
+  bpmValue: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#2f95dc',
+    fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
+  },
+  bpmLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#2f95dc',
+    opacity: 0.7,
+    letterSpacing: 1,
+  },
+
+  // Mode buttons row
   modeSwitchRow: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -500,7 +505,7 @@ const styles = StyleSheet.create({
   modeButtonText: { fontSize: 13, fontWeight: '700', color: '#2f95dc' },
   modeButtonTextActive: { color: '#fff' },
 
-  // Color button row — centered below mode buttons
+  // Color button row
   colorRow: {
     alignItems: 'center',
     marginBottom: 14,
@@ -520,7 +525,8 @@ const styles = StyleSheet.create({
   bandLabels: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    width: '80%',
+    width: '100%',
+    maxWidth: 360,
     marginBottom: 6,
     backgroundColor: 'transparent',
   },
@@ -554,31 +560,23 @@ const styles = StyleSheet.create({
     position: 'relative',
     height: 136,
   },
-  playhead: {
-    position: 'absolute',
-    top: -8,
-    width: 2,
-    backgroundColor: '#fff',
-    borderRadius: 1,
-    opacity: 0.9,
-  },
 
   // Circular mode
   circularContainer: {
-    width: 220,
-    height: 220,
+    width: 280,
+    height: 280,
     marginBottom: 16,
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
   },
   circularCenter: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     position: 'absolute',
-    top: 100,
-    left: 100,
+    top: 129,
+    left: 129,
     opacity: 0.9,
   },
 
@@ -630,7 +628,8 @@ const styles = StyleSheet.create({
   volumeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    width: '80%',
+    width: '100%',
+    maxWidth: 360,
     marginBottom: 20,
     backgroundColor: 'transparent',
   },
