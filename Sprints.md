@@ -12,6 +12,7 @@
 |--------|-------|-------|----------|---------------|
 | 1      | 03/03 | 10/03 | 1 week   | Mateusz Troc  |
 | 2      | 11/03 | 17/03 | 1 week   | Hubert Stocki |
+| 3      | 18/03 | 24/03 | 1 week   | Mateusz Troc  |
 
 ---
 
@@ -23,3 +24,7 @@
 - Baseline MVP: audio file picker, playback, and bar visualizer (PR #5, issue #2)
 - Audio playback controls with seek bar, volume, and speed (PR #6, issue #3)
 - Real-time waveform visualizer with frequency bands and color themes (PR #7, PR #8, issue #4)
+
+**Sprint 3** — Parallel feature branches (one per team member):
+- Real audio frequency analysis (FFT) with BPM detection (issue #9)
+- Playlist & queue management with playback navigation (issue #10)
