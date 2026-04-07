@@ -6,6 +6,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 
 const FFT_SIZE = 512;
 const NUM_BANDS = 20;
+const WAVEFORM_BARS = 40;
 
 export function useAudioEngine() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -15,6 +16,7 @@ export function useAudioEngine() {
   const [didJustFinish, setDidJustFinish] = useState(false);
 
   const frequencyDataRef = useRef<number[]>(new Array(NUM_BANDS).fill(0));
+  const waveformDataRef = useRef<number[]>(new Array(WAVEFORM_BARS).fill(0.5));
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -62,6 +64,22 @@ export function useAudioEngine() {
       bands[i] = sum / binsPerBand;
     }
     frequencyDataRef.current = bands;
+
+    // ── Time-domain waveform data ──
+    const timeDomainArray = new Uint8Array(bufferLength);
+    analyser.getByteTimeDomainData(timeDomainArray);
+    const waveformBinsPerBar = Math.floor(bufferLength / WAVEFORM_BARS);
+    const waveform: number[] = [];
+    for (let i = 0; i < WAVEFORM_BARS; i++) {
+      let maxAmp = 0;
+      const start = i * waveformBinsPerBar;
+      for (let j = start; j < start + waveformBinsPerBar && j < bufferLength; j++) {
+        const amp = Math.abs(timeDomainArray[j] - 128) / 128;
+        if (amp > maxAmp) maxAmp = amp;
+      }
+      waveform[i] = Math.max(0.05, maxAmp);
+    }
+    waveformDataRef.current = waveform;
 
     // ── BPM detection: bass energy onset ──
     const bassEnergy = (bands[0] + bands[1] + bands[2] + bands[3]) / 4;
@@ -149,6 +167,7 @@ export function useAudioEngine() {
         setDidJustFinish(true);
         cancelAnimationFrame(rafRef.current);
         frequencyDataRef.current = new Array(NUM_BANDS).fill(0);
+        waveformDataRef.current = new Array(WAVEFORM_BARS).fill(0.5);
       });
 
       setCurrentTime(0);
@@ -206,6 +225,7 @@ export function useAudioEngine() {
     didJustFinish,
     bpm,
     frequencyDataRef,
+    waveformDataRef,
     loadAudio,
     play,
     pause,
