@@ -12,7 +12,9 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Text, View } from '@/components/Themed';
+import MusicInfo from 'expo-music-info-2';
+import { Text, View, useThemeColor } from '@/components/Themed';
+import { useColorScheme } from '@/components/useColorScheme';
 import { useAudioEngine } from '@/hooks/useAudioEngine';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -38,6 +40,8 @@ interface Track {
   name: string;
   uri: string;
   waveShape: number[];
+  artist?: string;
+  album?: string;
 }
 
 // ─── Color helpers ──────────────────────────────────────────────────────────
@@ -89,6 +93,23 @@ function formatTime(s: number): string {
   return `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
 }
 
+async function extractMetadata(uri: string, fileName: string): Promise<{ title: string; artist?: string; album?: string }> {
+  const fallbackName = fileName.replace(/\.[^/.]+$/, '');
+  try {
+    const metadata = await (MusicInfo as any).getMusicInfoAsync(uri, { title: true, artist: true, album: true });
+    if (metadata) {
+      return {
+        title: metadata.title || fallbackName,
+        artist: metadata.artist || undefined,
+        album: metadata.album || undefined,
+      };
+    }
+  } catch {
+    // expo-music-info-2 not available on web — fallback to filename
+  }
+  return { title: fallbackName };
+}
+
 // ─── Bar heights hook ───────────────────────────────────────────────────────
 
 function useBarHeights() {
@@ -122,8 +143,9 @@ function Bar({ height, index, scheme, maxHeight }: {
 function WaveformDisplay({ waveShape, progress, scheme }: {
   waveShape: number[]; progress: number; scheme: ColorScheme;
 }) {
+  const data = waveShape;
   const H = 120, W = 6, GAP = 5;
-  const totalW = waveShape.length * (W + GAP);
+  const totalW = data.length * (W + GAP);
   const playheadX = useSharedValue(0);
   playheadX.value = withTiming(progress * totalW, { duration: 120, easing: Easing.linear });
 
@@ -134,9 +156,9 @@ function WaveformDisplay({ waveShape, progress, scheme }: {
 
   return (
     <RNView style={[styles.waveformWrapper, { width: totalW }]}>
-      {waveShape.map((amp, i) => {
+      {data.map((amp, i) => {
         const barH = Math.max(4, amp * H);
-        const frac = i / waveShape.length;
+        const frac = i / data.length;
         let c: string;
         if (scheme === 'black') c = `hsl(0,0%,${Math.round(30 + amp * 50)}%)`;
         else if (scheme === 'blue') c = `hsl(210,80%,${Math.round(35 + amp * 35)}%)`;
@@ -179,65 +201,66 @@ function CircularBar({ height, index, total, scheme }: {
 
 // ─── Playlist Modal ─────────────────────────────────────────────────────────
 
-function PlaylistModal({ visible, tracks, currentIndex, onClose, onSelectTrack, onRemoveTrack }: {
+function PlaylistModal({ visible, tracks, currentIndex, onClose, onSelectTrack, onRemoveTrack, dark }: {
   visible: boolean;
   tracks: Track[];
   currentIndex: number;
   onClose: () => void;
   onSelectTrack: (index: number) => void;
   onRemoveTrack: (index: number) => void;
+  dark: boolean;
 }) {
+  const m = dark ? modalDark : modalLight;
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
       <Pressable style={styles.modalOverlay} onPress={onClose}>
-        <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-          {/* Header */}
-          <RNView style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>
+        <Pressable style={[styles.modalCard, { backgroundColor: m.bg }]} onPress={(e) => e.stopPropagation()}>
+          <RNView style={[styles.modalHeader, { backgroundColor: m.bg }]}>
+            <Text style={[styles.modalTitle, { color: m.title }]}>
               Playlist ({tracks.length})
             </Text>
             <Pressable onPress={onClose} hitSlop={12}>
-              <Ionicons name="close" size={24} color="#999" />
+              <Ionicons name="close" size={24} color={m.dim} />
             </Pressable>
           </RNView>
-
-          {/* Divider */}
-          <RNView style={styles.modalDivider} />
+          <RNView style={[styles.modalDivider, { backgroundColor: m.divider }]} />
 
           {tracks.length === 0 ? (
-            <RNView style={styles.emptyPlaylist}>
-              <Text style={styles.emptyPlaylistText}>No tracks added yet</Text>
+            <RNView style={[styles.emptyPlaylist, { backgroundColor: m.bg }]}>
+              <Text style={[styles.emptyPlaylistText, { color: m.dim }]}>No tracks added yet</Text>
             </RNView>
           ) : (
-            <ScrollView
-              style={styles.trackList}
-              showsVerticalScrollIndicator={false}
-            >
+            <ScrollView style={[styles.trackList, { backgroundColor: m.bg }]} showsVerticalScrollIndicator={false}>
               {tracks.map((track, i) => {
                 const active = i === currentIndex;
                 return (
                   <Pressable
                     key={track.id}
-                    style={[styles.trackRow, active && styles.trackRowActive]}
+                    style={[styles.trackRow, { borderBottomColor: m.divider }, active && { backgroundColor: m.activeRow }]}
                     onPress={() => { onSelectTrack(i); onClose(); }}
                   >
                     {active ? (
                       <Ionicons name="play" size={14} color={ACCENT} style={styles.trackIcon} />
                     ) : (
-                      <Text style={styles.trackNum}>{i + 1}</Text>
+                      <Text style={[styles.trackNum, { color: m.dim }]}>{i + 1}</Text>
                     )}
-                    <Text
-                      style={[styles.trackName, active && styles.trackNameActive]}
-                      numberOfLines={1}
-                    >
-                      {track.name}
-                    </Text>
+                    <RNView style={[styles.trackTextCol, { backgroundColor: 'transparent' }]}>
+                      <Text
+                        style={[styles.trackName, { color: m.text }, active && styles.trackNameActive]}
+                        numberOfLines={1}
+                      >
+                        {track.name}
+                      </Text>
+                      {track.artist && (
+                        <Text style={[styles.trackArtistSmall, { color: m.dim }]} numberOfLines={1}>{track.artist}</Text>
+                      )}
+                    </RNView>
                     <Pressable
                       onPress={(e) => { e.stopPropagation(); onRemoveTrack(i); }}
                       hitSlop={10}
                       style={styles.removeBtn}
                     >
-                      <Ionicons name="remove-circle-outline" size={18} color="#ccc" />
+                      <Ionicons name="remove-circle-outline" size={18} color={m.dim} />
                     </Pressable>
                   </Pressable>
                 );
@@ -250,6 +273,15 @@ function PlaylistModal({ visible, tracks, currentIndex, onClose, onSelectTrack, 
   );
 }
 
+const modalLight = {
+  bg: '#fff', title: '#222', text: '#444', dim: '#aaa',
+  divider: '#f0f0f0', activeRow: '#f0f7ff',
+};
+const modalDark = {
+  bg: '#161625', title: '#e8e8f0', text: '#c0c0cc', dim: '#666',
+  divider: 'rgba(255,255,255,0.08)', activeRow: 'rgba(47,149,220,0.12)',
+};
+
 // ─── Main Screen ────────────────────────────────────────────────────────────
 
 export default function VisualizerScreen() {
@@ -257,6 +289,8 @@ export default function VisualizerScreen() {
   const engine = useAudioEngine();
   const barHeights = useBarHeights();
   const rafRef = useRef<number>(0);
+  const isDark = useColorScheme() === 'dark';
+  const borderColor = isDark ? 'rgba(255,255,255,0.18)' : '#ccc';
 
   // Playlist state
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -374,12 +408,19 @@ export default function VisualizerScreen() {
       } as any);
       if (result.canceled) return;
 
-      const newTracks: Track[] = result.assets.map((file: any) => ({
-        id: `${file.name}-${Date.now()}-${Math.random()}`,
-        name: file.name,
-        uri: file.uri,
-        waveShape: generateWaveformShape(WAVEFORM_BARS),
-      }));
+      const newTracks: Track[] = await Promise.all(
+        result.assets.map(async (file: any) => {
+          const meta = await extractMetadata(file.uri, file.name);
+          return {
+            id: `${file.name}-${Date.now()}-${Math.random()}`,
+            name: meta.title,
+            uri: file.uri,
+            waveShape: generateWaveformShape(WAVEFORM_BARS),
+            artist: meta.artist,
+            album: meta.album,
+          };
+        })
+      );
 
       setTracks(prev => {
         const updated = [...prev, ...newTracks];
@@ -460,7 +501,7 @@ export default function VisualizerScreen() {
                 <Text style={styles.bpmUnit}>BPM</Text>
               </View>
             )}
-            <Pressable style={styles.infoBtn} onPress={() => router.push('/about')}>
+            <Pressable style={[styles.infoBtn, { borderColor }]} onPress={() => router.push('/about')}>
               <Text style={styles.infoBtnText}>i</Text>
             </Pressable>
           </View>
@@ -518,17 +559,22 @@ export default function VisualizerScreen() {
 
           <RNView style={styles.modeDivider} />
 
-          <Pressable style={styles.colorBtn} onPress={cycleColor}>
-            <Text style={styles.colorBtnText}>{COLOR_LABELS[colorScheme]}</Text>
+          <Pressable style={[styles.colorBtn, { borderColor }]} onPress={cycleColor}>
+            <Text style={[styles.colorBtnText, { color: isDark ? '#aaa' : '#888' }]}>{COLOR_LABELS[colorScheme]}</Text>
           </Pressable>
         </View>
 
         {/* ── Player section ── */}
         {currentTrack ? (
           <View style={styles.playerSection}>
-            <Text style={styles.fileName} numberOfLines={1}>
+            <Text style={styles.trackTitle} numberOfLines={1}>
               {tracks.length > 1 ? `${currentIndex + 1}/${tracks.length}  ·  ` : ''}{currentTrack.name}
             </Text>
+            {currentTrack.artist && (
+              <Text style={styles.trackArtist} numberOfLines={1}>
+                {currentTrack.artist}{currentTrack.album ? `  ·  ${currentTrack.album}` : ''}
+              </Text>
+            )}
 
             <View style={styles.seekRow}>
               <Text style={styles.time}>{formatTime(currentTime)}</Text>
@@ -541,7 +587,7 @@ export default function VisualizerScreen() {
                 onValueChange={setSeekValue}
                 onSlidingComplete={onSeekComplete}
                 minimumTrackTintColor={ACCENT}
-                maximumTrackTintColor="#444"
+                maximumTrackTintColor={isDark ? '#444' : '#ddd'}
                 thumbTintColor={ACCENT}
               />
               <Text style={styles.time}>{formatTime(engine.duration)}</Text>
@@ -573,22 +619,22 @@ export default function VisualizerScreen() {
             {/* ── Secondary controls ── */}
             <View style={styles.secondaryRow}>
               <Pressable
-                style={[styles.secBtn, shuffle && styles.secBtnActive]}
+                style={[styles.secBtn, { borderColor }, shuffle && styles.secBtnActive]}
                 onPress={toggleShuffle}
               >
-                <Ionicons name="shuffle" size={16} color={shuffle ? ACCENT : '#888'} />
+                <Ionicons name="shuffle" size={16} color={shuffle ? ACCENT : isDark ? '#888' : '#999'} />
               </Pressable>
 
               <Pressable
-                style={[styles.secBtn, repeatActive && styles.secBtnActive]}
+                style={[styles.secBtn, { borderColor }, repeatActive && styles.secBtnActive]}
                 onPress={cycleRepeat}
               >
-                <Ionicons name="repeat" size={16} color={repeatActive ? ACCENT : '#888'} />
+                <Ionicons name="repeat" size={16} color={repeatActive ? ACCENT : isDark ? '#888' : '#999'} />
                 {repeat === 'one' && <Text style={styles.repeatOneLabel}>1</Text>}
               </Pressable>
 
               <Pressable
-                style={[styles.secBtn, styles.playlistBtn]}
+                style={[styles.secBtn, { borderColor }, styles.playlistBtn]}
                 onPress={() => setShowPlaylist(true)}
               >
                 <Ionicons name="list" size={16} color={ACCENT} />
@@ -598,7 +644,7 @@ export default function VisualizerScreen() {
 
             {/* ── Volume slider ── */}
             <View style={styles.volRow}>
-              <Ionicons name="volume-low" size={16} color="#888" />
+              <Ionicons name="volume-low" size={16} color={isDark ? '#888' : '#999'} />
               <Slider
                 style={styles.volSlider}
                 minimumValue={0}
@@ -606,7 +652,7 @@ export default function VisualizerScreen() {
                 value={volume}
                 onValueChange={onVolumeChange}
                 minimumTrackTintColor={ACCENT}
-                maximumTrackTintColor="#444"
+                maximumTrackTintColor={isDark ? '#444' : '#ddd'}
                 thumbTintColor={ACCENT}
               />
             </View>
@@ -631,6 +677,7 @@ export default function VisualizerScreen() {
         onClose={() => setShowPlaylist(false)}
         onSelectTrack={loadTrack}
         onRemoveTrack={removeTrack}
+        dark={isDark}
       />
     </View>
   );
@@ -790,7 +837,8 @@ const styles = StyleSheet.create({
 
   // Player section
   playerSection: { width: '100%', backgroundColor: 'transparent' },
-  fileName: { fontSize: 13, opacity: 0.7, textAlign: 'center', marginBottom: 4 },
+  trackTitle: { fontSize: 14, fontWeight: '600', textAlign: 'center', marginBottom: 2 },
+  trackArtist: { fontSize: 12, opacity: 0.5, textAlign: 'center', marginBottom: 4 },
 
   seekRow: {
     flexDirection: 'row',
@@ -932,8 +980,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   trackIcon: { width: 24, textAlign: 'center' },
-  trackName: { fontSize: 14, color: '#444', flex: 1, marginLeft: 10 },
+  trackTextCol: { flex: 1, marginLeft: 10 },
+  trackName: { fontSize: 14, color: '#444' },
   trackNameActive: { color: ACCENT, fontWeight: '600' },
+  trackArtistSmall: { fontSize: 11, color: '#999', marginTop: 1 },
   removeBtn: { padding: 6, marginLeft: 8 },
   emptyPlaylist: { padding: 40, alignItems: 'center' },
   emptyPlaylistText: { color: '#aaa', fontSize: 14 },

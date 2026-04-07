@@ -13,6 +13,7 @@ export function useAudioEngine() {
   const player = useAudioPlayer(null, { updateInterval: 100 });
   const status = useAudioPlayerStatus(player);
   const frequencyDataRef = useRef<number[]>(new Array(NUM_BANDS).fill(0));
+  const waveformDataRef = useRef<number[]>(new Array(40).fill(0.5));
   const rafRef = useRef<number>(0);
 
   // Simulated frequency data driven by playback state
@@ -77,6 +78,7 @@ export function useAudioEngine() {
     didJustFinish: (status as any).didJustFinish ?? false,
     bpm: 0, // Not available on native without a native FFT module
     frequencyDataRef,
+    waveformDataRef,
     loadAudio,
     play,
     pause,
