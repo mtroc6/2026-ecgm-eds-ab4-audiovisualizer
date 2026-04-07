@@ -13,6 +13,7 @@
 | 1      | 03/03 | 10/03 | 1 week   | Mateusz Troc  |
 | 2      | 11/03 | 17/03 | 1 week   | Hubert Stocki |
 | 3      | 18/03 | 24/03 | 1 week   | Mateusz Troc  |
+| 4      | 25/03 | 07/04 | 2 weeks  | Hubert Stocki |
 
 ---
 
@@ -27,4 +28,8 @@
 
 **Sprint 3** — Parallel feature branches (one per team member):
 - Real audio frequency analysis (FFT) with BPM detection (issue #9)
-- Playlist & queue management with playback navigation (issue #10)
+- Playlist & queue management with playback navigation (PR #12, issue #10)
+
+**Sprint 4** — Final features & polish (extended due to Easter break):
+- Playlist search & sleep timer (issue #13)
+- ID3 metadata extraction, real waveform data & codebase cleanup (issue #14)
