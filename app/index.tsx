@@ -4,11 +4,11 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal, Platform, Pressable, View as RNView, ScrollView, StyleSheet } from 'react-native';
 import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-  type SharedValue,
+    Easing,
+    useAnimatedStyle,
+    useSharedValue,
+    withTiming,
+    type SharedValue,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
