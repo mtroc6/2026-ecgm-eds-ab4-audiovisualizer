@@ -1,19 +1,22 @@
-import { useState, useRef, useEffect } from 'react';
-import { StyleSheet, Pressable, Platform, View as RNView } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import * as DocumentPicker from 'expo-document-picker';
 import Slider from '@react-native-community/slider';
+import * as DocumentPicker from 'expo-document-picker';
+import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Modal, Platform, Pressable, View as RNView, ScrollView, StyleSheet } from 'react-native';
 import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  Easing,
-  type SharedValue,
+    Easing,
+    useAnimatedStyle,
+    useSharedValue,
+    withTiming,
+    type SharedValue,
 } from 'react-native-reanimated';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Text, View } from '@/components/Themed';
 import { useAudioEngine } from '@/hooks/useAudioEngine';
+import Ionicons from '@expo/vector-icons/Ionicons';
+
+// ─── Constants ──────────────────────────────────────────────────────────────
 
 const NUM_BARS = 20;
 const WAVEFORM_BARS = 40;
@@ -21,12 +24,24 @@ const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const CIRC_R = 78;
 const CIRC_SIZE = 220;
 const CIRC_C = CIRC_SIZE / 2;
+const ACCENT = '#2f95dc';
+const ACCENT_DIM = 'rgba(47, 149, 220, 0.15)';
 
-// ─── Types ──────────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────────────
+
 type VisMode = 'bars' | 'waveform' | 'circular';
 type ColorScheme = 'black' | 'blue' | 'colorful';
+type RepeatMode = 'none' | 'one' | 'all';
 
-// ─── Color helpers ──────────────────────────────────────────────────
+interface Track {
+  id: string;
+  name: string;
+  uri: string;
+  waveShape: number[];
+}
+
+// ─── Color helpers ──────────────────────────────────────────────────────────
+
 function getBarColor(scheme: ColorScheme, index: number, total: number, intensity: number): string {
   switch (scheme) {
     case 'black': {
@@ -44,7 +59,7 @@ function getBarColor(scheme: ColorScheme, index: number, total: number, intensit
       return `hsl(${h}, 90%, ${l}%)`;
     }
     default:
-      return '#2f95dc';
+      return ACCENT;
   }
 }
 
@@ -53,10 +68,11 @@ function getBandColor(scheme: ColorScheme, band: 'bass' | 'mid' | 'treble', inte
   return getBarColor(scheme, idx, NUM_BARS, intensity);
 }
 
-const COLOR_ICONS: Record<ColorScheme, string> = { black: '⚫', blue: '🔵', colorful: '🌈' };
+const COLOR_LABELS: Record<ColorScheme, string> = { black: 'Dark', blue: 'Blue', colorful: 'Color' };
 const COLOR_KEYS: ColorScheme[] = ['black', 'blue', 'colorful'];
 
-// ─── Waveform shape generator ───────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
 function generateWaveformShape(count: number): number[] {
   const result: number[] = [];
   let prev = 0.5;
@@ -68,7 +84,13 @@ function generateWaveformShape(count: number): number[] {
   return result;
 }
 
-// ─── Bar heights hook ───────────────────────────────────────────────
+function formatTime(s: number): string {
+  if (!s || !isFinite(s)) return '0:00';
+  return `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
+}
+
+// ─── Bar heights hook ───────────────────────────────────────────────────────
+
 function useBarHeights() {
   const b0 = useSharedValue(10); const b1 = useSharedValue(10);
   const b2 = useSharedValue(10); const b3 = useSharedValue(10);
@@ -83,7 +105,8 @@ function useBarHeights() {
   return [b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15, b16, b17, b18, b19];
 }
 
-// ─── Animated Bar (Bars mode) ───────────────────────────────────────
+// ─── Animated Bar ───────────────────────────────────────────────────────────
+
 function Bar({ height, index, scheme, maxHeight }: {
   height: SharedValue<number>; index: number; scheme: ColorScheme; maxHeight: number;
 }) {
@@ -94,9 +117,10 @@ function Bar({ height, index, scheme, maxHeight }: {
   return <Animated.View style={[styles.bar, animatedStyle]} />;
 }
 
-// ─── Waveform Display ───────────────────────────────────────────────
+// ─── Waveform Display ───────────────────────────────────────────────────────
+
 function WaveformDisplay({ waveShape, progress, scheme }: {
-  waveShape: number[]; progress: number; scheme: ColorScheme; isPlaying: boolean;
+  waveShape: number[]; progress: number; scheme: ColorScheme;
 }) {
   const H = 120, W = 6, GAP = 5;
   const totalW = waveShape.length * (W + GAP);
@@ -109,7 +133,7 @@ function WaveformDisplay({ waveShape, progress, scheme }: {
   }));
 
   return (
-    <View style={[styles.waveformWrapper, { width: totalW }]}>
+    <RNView style={[styles.waveformWrapper, { width: totalW }]}>
       {waveShape.map((amp, i) => {
         const barH = Math.max(4, amp * H);
         const frac = i / waveShape.length;
@@ -118,18 +142,19 @@ function WaveformDisplay({ waveShape, progress, scheme }: {
         else if (scheme === 'blue') c = `hsl(210,80%,${Math.round(35 + amp * 35)}%)`;
         else { const hue = Math.round(220 - amp * 220); c = `hsl(${hue},85%,${Math.round(45 + amp * 20)}%)`; }
         return (
-          <View key={i} style={{
+          <RNView key={i} style={{
             width: W, height: barH, borderRadius: 2, backgroundColor: c,
             marginRight: GAP, alignSelf: 'center', opacity: frac <= progress ? 1 : 0.3,
           }} />
         );
       })}
       <Animated.View style={phStyle} />
-    </View>
+    </RNView>
   );
 }
 
-// ─── Circular Bar ───────────────────────────────────────────────────
+// ─── Circular Bar ───────────────────────────────────────────────────────────
+
 function CircularBar({ height, index, total, scheme }: {
   height: SharedValue<number>; index: number; total: number; scheme: ColorScheme;
 }) {
@@ -152,10 +177,96 @@ function CircularBar({ height, index, total, scheme }: {
   return <Animated.View style={animatedStyle} />;
 }
 
-// ─── Main Screen ────────────────────────────────────────────────────
+// ─── Playlist Modal ─────────────────────────────────────────────────────────
+
+function PlaylistModal({ visible, tracks, currentIndex, onClose, onSelectTrack, onRemoveTrack }: {
+  visible: boolean;
+  tracks: Track[];
+  currentIndex: number;
+  onClose: () => void;
+  onSelectTrack: (index: number) => void;
+  onRemoveTrack: (index: number) => void;
+}) {
+  return (
+    <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
+      <Pressable style={styles.modalOverlay} onPress={onClose}>
+        <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+          {/* Header */}
+          <RNView style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>
+              Playlist ({tracks.length})
+            </Text>
+            <Pressable onPress={onClose} hitSlop={12}>
+              <Ionicons name="close" size={24} color="#999" />
+            </Pressable>
+          </RNView>
+
+          {/* Divider */}
+          <RNView style={styles.modalDivider} />
+
+          {tracks.length === 0 ? (
+            <RNView style={styles.emptyPlaylist}>
+              <Text style={styles.emptyPlaylistText}>No tracks added yet</Text>
+            </RNView>
+          ) : (
+            <ScrollView
+              style={styles.trackList}
+              showsVerticalScrollIndicator={false}
+            >
+              {tracks.map((track, i) => {
+                const active = i === currentIndex;
+                return (
+                  <Pressable
+                    key={track.id}
+                    style={[styles.trackRow, active && styles.trackRowActive]}
+                    onPress={() => { onSelectTrack(i); onClose(); }}
+                  >
+                    {active ? (
+                      <Ionicons name="play" size={14} color={ACCENT} style={styles.trackIcon} />
+                    ) : (
+                      <Text style={styles.trackNum}>{i + 1}</Text>
+                    )}
+                    <Text
+                      style={[styles.trackName, active && styles.trackNameActive]}
+                      numberOfLines={1}
+                    >
+                      {track.name}
+                    </Text>
+                    <Pressable
+                      onPress={(e) => { e.stopPropagation(); onRemoveTrack(i); }}
+                      hitSlop={10}
+                      style={styles.removeBtn}
+                    >
+                      <Ionicons name="remove-circle-outline" size={18} color="#ccc" />
+                    </Pressable>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          )}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// ─── Main Screen ────────────────────────────────────────────────────────────
+
 export default function VisualizerScreen() {
   const router = useRouter();
-  const [fileName, setFileName] = useState<string | null>(null);
+  const engine = useAudioEngine();
+  const barHeights = useBarHeights();
+  const rafRef = useRef<number>(0);
+
+  // Playlist state
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [showPlaylist, setShowPlaylist] = useState(false);
+  const [shuffle, setShuffle] = useState(false);
+  const [repeat, setRepeat] = useState<RepeatMode>('none');
+  const shuffleOrder = useRef<number[]>([]);
+
+  // UI state
   const [isSeeking, setIsSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
   const [speedIndex, setSpeedIndex] = useState(2);
@@ -163,17 +274,13 @@ export default function VisualizerScreen() {
   const [visMode, setVisMode] = useState<VisMode>('bars');
   const [colorScheme, setColorScheme] = useState<ColorScheme>('colorful');
   const [waveKey, setWaveKey] = useState(0);
-  const [waveShapes, setWaveShapes] = useState<number[][]>([generateWaveformShape(WAVEFORM_BARS)]);
 
-  const engine = useAudioEngine();
-  const barHeights = useBarHeights();
-  const rafRef = useRef<number>(0);
-
-  const isPlaying = engine.isPlaying;
+  const currentTrack = tracks[currentIndex] ?? null;
   const currentTime = isSeeking ? seekValue : engine.currentTime;
   const progress = engine.duration > 0 ? currentTime / engine.duration : 0;
 
-  // ── Sync FFT → shared values ──
+  // ── Sync FFT data → shared bar heights ──
+
   useEffect(() => {
     const update = () => {
       const data = engine.frequencyDataRef.current;
@@ -182,37 +289,148 @@ export default function VisualizerScreen() {
       }
       rafRef.current = requestAnimationFrame(update);
     };
-    if (isPlaying) {
+    if (engine.isPlaying) {
       rafRef.current = requestAnimationFrame(update);
     } else {
       for (const bar of barHeights) bar.value = withTiming(10, { duration: 400 });
     }
     return () => cancelAnimationFrame(rafRef.current);
-  }, [isPlaying, barHeights, engine.frequencyDataRef]);
+  }, [engine.isPlaying, barHeights, engine.frequencyDataRef]);
+
+  // ── Shuffle order generator ──
+
+  const generateShuffleOrder = useCallback((length: number, current: number) => {
+    const order = Array.from({ length }, (_, i) => i).filter(i => i !== current);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    shuffleOrder.current = [current, ...order];
+  }, []);
+
+  // ── Load track by index ──
+
+  const loadTrack = useCallback((index: number) => {
+    const track = tracks[index];
+    if (!track) return;
+    setCurrentIndex(index);
+    engine.loadAudio(track.uri);
+    setSpeedIndex(2);
+    engine.setPlaybackRate(1);
+    setWaveKey(k => k + 1);
+    setTimeout(() => engine.play(), 100);
+  }, [tracks, engine]);
+
+  // ── Next / Previous ──
+
+  const playNext = useCallback(() => {
+    if (tracks.length === 0) return;
+    if (shuffle) {
+      const pos = shuffleOrder.current.indexOf(currentIndex);
+      const next = (pos + 1) % shuffleOrder.current.length;
+      loadTrack(shuffleOrder.current[next]);
+    } else {
+      const next = (currentIndex + 1) % tracks.length;
+      if (next === 0 && repeat === 'none') return;
+      loadTrack(next);
+    }
+  }, [tracks, currentIndex, shuffle, repeat, loadTrack]);
+
+  const playPrev = useCallback(() => {
+    if (tracks.length === 0) return;
+    if (engine.currentTime > 3) {
+      engine.seekTo(0);
+      return;
+    }
+    if (shuffle) {
+      const pos = shuffleOrder.current.indexOf(currentIndex);
+      const prev = (pos - 1 + shuffleOrder.current.length) % shuffleOrder.current.length;
+      loadTrack(shuffleOrder.current[prev]);
+    } else {
+      loadTrack((currentIndex - 1 + tracks.length) % tracks.length);
+    }
+  }, [tracks, currentIndex, shuffle, engine, loadTrack]);
+
+  // ── Auto-advance when track ends ──
+
+  useEffect(() => {
+    if (!engine.didJustFinish) return;
+    if (repeat === 'one') {
+      engine.seekTo(0);
+      engine.play();
+      return;
+    }
+    playNext();
+  }, [engine.didJustFinish]);
+
+  // ── Pick audio files ──
 
   const pickAudio = async () => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({ type: 'audio/*', copyToCacheDirectory: true });
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'audio/*',
+        copyToCacheDirectory: true,
+        multiple: true,
+      } as any);
       if (result.canceled) return;
-      const file = result.assets[0];
-      setFileName(file.name);
-      engine.loadAudio(file.uri);
-      setSpeedIndex(2);
-      engine.setPlaybackRate(1);
-      setWaveShapes([generateWaveformShape(WAVEFORM_BARS)]);
-      setWaveKey(k => k + 1);
+
+      const newTracks: Track[] = result.assets.map((file: any) => ({
+        id: `${file.name}-${Date.now()}-${Math.random()}`,
+        name: file.name,
+        uri: file.uri,
+        waveShape: generateWaveformShape(WAVEFORM_BARS),
+      }));
+
+      setTracks(prev => {
+        const updated = [...prev, ...newTracks];
+        if (prev.length === 0) {
+          setTimeout(() => {
+            engine.loadAudio(newTracks[0].uri);
+            engine.setPlaybackRate(1);
+            setWaveKey(k => k + 1);
+            setTimeout(() => engine.play(), 100);
+          }, 50);
+        }
+        if (shuffle) generateShuffleOrder(updated.length, currentIndex);
+        return updated;
+      });
     } catch (error) {
       console.error('Error picking audio:', error);
     }
   };
 
+  // ── Playback controls ──
+
   const togglePlayPause = () => {
-    if (isPlaying) {
+    if (!currentTrack) return;
+    if (engine.isPlaying) {
       engine.pause();
     } else {
       if (engine.currentTime >= engine.duration && engine.duration > 0) engine.seekTo(0);
       engine.play();
     }
+  };
+
+  const toggleShuffle = () => {
+    const next = !shuffle;
+    setShuffle(next);
+    if (next) generateShuffleOrder(tracks.length, currentIndex);
+  };
+
+  const cycleRepeat = () => {
+    setRepeat(r => r === 'none' ? 'all' : r === 'all' ? 'one' : 'none');
+  };
+
+  const removeTrack = (index: number) => {
+    setTracks(prev => {
+      const updated = prev.filter((_, i) => i !== index);
+      if (index === currentIndex && updated.length > 0) {
+        const newIdx = Math.min(index, updated.length - 1);
+        setTimeout(() => loadTrack(newIdx), 50);
+      }
+      return updated;
+    });
+    if (index < currentIndex) setCurrentIndex(i => i - 1);
   };
 
   const onSeekStart = () => { setIsSeeking(true); setSeekValue(engine.currentTime); };
@@ -227,12 +445,7 @@ export default function VisualizerScreen() {
     setColorScheme(COLOR_KEYS[(COLOR_KEYS.indexOf(colorScheme) + 1) % COLOR_KEYS.length]);
   };
 
-  const fmt = (s: number) => {
-    if (!s || !isFinite(s)) return '0:00';
-    return `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
-  };
-
-  const currentWaveShape = waveShapes[0] ?? generateWaveformShape(WAVEFORM_BARS);
+  const repeatActive = repeat !== 'none';
 
   return (
     <View style={styles.screen}>
@@ -260,7 +473,7 @@ export default function VisualizerScreen() {
           <Text style={[styles.bandLabel, { color: getBandColor(colorScheme, 'treble', 0.8) }]}>TREBLE</Text>
         </View>
 
-        {/* ── Visualizer area (flex) ── */}
+        {/* ── Visualizer area ── */}
         <View style={styles.visArea}>
           {visMode === 'bars' && (
             <View style={styles.barsContainer}>
@@ -273,10 +486,9 @@ export default function VisualizerScreen() {
             <View style={styles.waveformContainer}>
               <WaveformDisplay
                 key={waveKey}
-                waveShape={currentWaveShape}
+                waveShape={currentTrack?.waveShape ?? generateWaveformShape(WAVEFORM_BARS)}
                 progress={progress}
                 scheme={colorScheme}
-                isPlaying={isPlaying}
               />
             </View>
           )}
@@ -299,22 +511,27 @@ export default function VisualizerScreen() {
               onPress={() => setVisMode(m)}
             >
               <Text style={[styles.modeBtnText, visMode === m && styles.modeBtnTextActive]}>
-                {m === 'bars' ? '▮▮▮ Bars' : m === 'waveform' ? '〜 Wave' : '◎ Circle'}
+                {m === 'bars' ? 'Bars' : m === 'waveform' ? 'Wave' : 'Circle'}
               </Text>
             </Pressable>
           ))}
+
+          <RNView style={styles.modeDivider} />
+
           <Pressable style={styles.colorBtn} onPress={cycleColor}>
-            <Text style={styles.colorBtnText}>{COLOR_ICONS[colorScheme]}</Text>
+            <Text style={styles.colorBtnText}>{COLOR_LABELS[colorScheme]}</Text>
           </Pressable>
         </View>
 
         {/* ── Player section ── */}
-        {fileName ? (
+        {currentTrack ? (
           <View style={styles.playerSection}>
-            <Text style={styles.fileName} numberOfLines={1}>{fileName}</Text>
+            <Text style={styles.fileName} numberOfLines={1}>
+              {tracks.length > 1 ? `${currentIndex + 1}/${tracks.length}  ·  ` : ''}{currentTrack.name}
+            </Text>
 
             <View style={styles.seekRow}>
-              <Text style={styles.time}>{fmt(currentTime)}</Text>
+              <Text style={styles.time}>{formatTime(currentTime)}</Text>
               <Slider
                 style={styles.seekBar}
                 minimumValue={0}
@@ -323,34 +540,74 @@ export default function VisualizerScreen() {
                 onSlidingStart={onSeekStart}
                 onValueChange={setSeekValue}
                 onSlidingComplete={onSeekComplete}
-                minimumTrackTintColor="#2f95dc"
+                minimumTrackTintColor={ACCENT}
                 maximumTrackTintColor="#444"
-                thumbTintColor="#2f95dc"
+                thumbTintColor={ACCENT}
               />
-              <Text style={styles.time}>{fmt(engine.duration)}</Text>
+              <Text style={styles.time}>{formatTime(engine.duration)}</Text>
             </View>
 
+            {/* ── Main controls ── */}
             <View style={styles.controlsRow}>
               <Pressable style={styles.ctrlBtn} onPress={cycleSpeed}>
                 <Text style={styles.ctrlBtnText}>{PLAYBACK_SPEEDS[speedIndex]}x</Text>
               </Pressable>
+
+              <Pressable style={styles.ctrlBtn} onPress={playPrev} disabled={tracks.length < 2}>
+                <Ionicons name="play-skip-back" size={18} color={ACCENT} style={tracks.length < 2 ? styles.disabled : undefined} />
+              </Pressable>
+
               <Pressable style={styles.playBtn} onPress={togglePlayPause}>
-                <Text style={styles.playBtnText}>{isPlaying ? '⏸' : '▶'}</Text>
+                <Ionicons name={engine.isPlaying ? 'pause' : 'play'} size={22} color="#fff" />
               </Pressable>
+
+              <Pressable style={styles.ctrlBtn} onPress={playNext} disabled={tracks.length < 2}>
+                <Ionicons name="play-skip-forward" size={18} color={ACCENT} style={tracks.length < 2 ? styles.disabled : undefined} />
+              </Pressable>
+
               <Pressable style={styles.ctrlBtn} onPress={() => onVolumeChange(volume > 0 ? 0 : 1)}>
-                <Text style={styles.ctrlBtnText}>
-                  {volume === 0 ? '🔇' : volume < 0.5 ? '🔉' : '🔊'}
-                </Text>
+                <Ionicons name={volume === 0 ? 'volume-mute' : volume < 0.5 ? 'volume-low' : 'volume-high'} size={18} color={ACCENT} />
               </Pressable>
+            </View>
+
+            {/* ── Secondary controls ── */}
+            <View style={styles.secondaryRow}>
+              <Pressable
+                style={[styles.secBtn, shuffle && styles.secBtnActive]}
+                onPress={toggleShuffle}
+              >
+                <Ionicons name="shuffle" size={16} color={shuffle ? ACCENT : '#888'} />
+              </Pressable>
+
+              <Pressable
+                style={[styles.secBtn, repeatActive && styles.secBtnActive]}
+                onPress={cycleRepeat}
+              >
+                <Ionicons name="repeat" size={16} color={repeatActive ? ACCENT : '#888'} />
+                {repeat === 'one' && <Text style={styles.repeatOneLabel}>1</Text>}
+              </Pressable>
+
+              <Pressable
+                style={[styles.secBtn, styles.playlistBtn]}
+                onPress={() => setShowPlaylist(true)}
+              >
+                <Ionicons name="list" size={16} color={ACCENT} />
+                <Text style={styles.playlistBtnText}>{tracks.length}</Text>
+              </Pressable>
+            </View>
+
+            {/* ── Volume slider ── */}
+            <View style={styles.volRow}>
+              <Ionicons name="volume-low" size={16} color="#888" />
               <Slider
                 style={styles.volSlider}
                 minimumValue={0}
                 maximumValue={1}
                 value={volume}
                 onValueChange={onVolumeChange}
-                minimumTrackTintColor="#2f95dc"
+                minimumTrackTintColor={ACCENT}
                 maximumTrackTintColor="#444"
-                thumbTintColor="#2f95dc"
+                thumbTintColor={ACCENT}
               />
             </View>
           </View>
@@ -361,14 +618,26 @@ export default function VisualizerScreen() {
         )}
 
         <Pressable style={styles.pickBtn} onPress={pickAudio}>
-          <Text style={styles.pickBtnText}>{fileName ? 'Change File' : 'Pick Audio File'}</Text>
+          <Text style={styles.pickBtnText}>
+            {tracks.length === 0 ? 'Pick Audio Files' : '+ Add More Files'}
+          </Text>
         </Pressable>
       </SafeAreaView>
+
+      <PlaylistModal
+        visible={showPlaylist}
+        tracks={tracks}
+        currentIndex={currentIndex}
+        onClose={() => setShowPlaylist(false)}
+        onSelectTrack={loadTrack}
+        onRemoveTrack={removeTrack}
+      />
     </View>
   );
 }
 
-// ─── Styles ─────────────────────────────────────────────────────────
+// ─── Styles ─────────────────────────────────────────────────────────────────
+
 const MONO = Platform.select({ ios: 'Menlo', default: 'monospace' });
 
 const styles = StyleSheet.create({
@@ -404,13 +673,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'baseline',
     gap: 3,
-    backgroundColor: 'rgba(47, 149, 220, 0.12)',
+    backgroundColor: ACCENT_DIM,
     paddingHorizontal: 10,
     paddingVertical: 3,
     borderRadius: 12,
   },
-  bpmValue: { fontSize: 18, fontWeight: '800', color: '#2f95dc', fontFamily: MONO },
-  bpmUnit: { fontSize: 10, fontWeight: '700', color: '#2f95dc', opacity: 0.7 },
+  bpmValue: { fontSize: 18, fontWeight: '800', color: ACCENT, fontFamily: MONO },
+  bpmUnit: { fontSize: 10, fontWeight: '700', color: ACCENT, opacity: 0.7 },
   infoBtn: {
     width: 28,
     height: 28,
@@ -433,7 +702,7 @@ const styles = StyleSheet.create({
   },
   bandLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.5 },
 
-  // Visualizer area — flex fills available space
+  // Visualizer area
   visArea: {
     flex: 1,
     width: '100%',
@@ -505,19 +774,19 @@ const styles = StyleSheet.create({
     borderColor: '#2f95dc',
     backgroundColor: 'transparent',
   },
-  modeBtnActive: { backgroundColor: '#2f95dc' },
-  modeBtnText: { fontSize: 12, fontWeight: '700', color: '#2f95dc' },
+  modeBtnActive: { backgroundColor: ACCENT },
+  modeBtnText: { fontSize: 12, fontWeight: '700', color: ACCENT },
   modeBtnTextActive: { color: '#fff' },
+  modeDivider: { width: 1.5, height: 22, backgroundColor: '#888', marginHorizontal: 6, borderRadius: 1, opacity: 0.5 },
   colorBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 16,
     borderWidth: 1.5,
     borderColor: '#555',
     backgroundColor: 'transparent',
-    marginLeft: 4,
   },
-  colorBtnText: { fontSize: 14 },
+  colorBtnText: { fontSize: 12, fontWeight: '700', color: '#888' },
 
   // Player section
   playerSection: { width: '100%', backgroundColor: 'transparent' },
@@ -527,7 +796,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     width: '100%',
-    marginBottom: 8,
+    marginBottom: 6,
     backgroundColor: 'transparent',
   },
   seekBar: { flex: 1, height: 36, marginHorizontal: 6 },
@@ -538,28 +807,62 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
-    marginBottom: 10,
+    marginBottom: 8,
     backgroundColor: 'transparent',
   },
   ctrlBtn: {
-    backgroundColor: 'rgba(47, 149, 220, 0.12)',
+    backgroundColor: ACCENT_DIM,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 8,
     minWidth: 44,
     alignItems: 'center',
   },
-  ctrlBtnText: { fontSize: 15, fontWeight: '600', color: '#2f95dc' },
+  ctrlBtnText: { fontSize: 15, fontWeight: '600', color: ACCENT },
   playBtn: {
-    backgroundColor: '#2f95dc',
+    backgroundColor: ACCENT,
     width: 50,
     height: 50,
     borderRadius: 25,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  playBtnText: { fontSize: 20, color: '#fff' },
-  volSlider: { flex: 1, height: 32, maxWidth: 120 },
+  disabled: { opacity: 0.25 },
+
+  // Secondary controls (shuffle / repeat / playlist)
+  secondaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 8,
+    backgroundColor: 'transparent',
+  },
+  secBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#555',
+    backgroundColor: 'transparent',
+  },
+  secBtnActive: { borderColor: ACCENT, backgroundColor: ACCENT_DIM },
+  repeatOneLabel: { fontSize: 10, fontWeight: '800', color: ACCENT },
+  playlistBtn: { borderColor: ACCENT_DIM },
+  playlistBtnText: { fontSize: 12, fontWeight: '600', color: ACCENT },
+
+  // Volume
+  volRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+    backgroundColor: 'transparent',
+  },
+  volSlider: { flex: 1, height: 28, marginLeft: 8, maxWidth: 200 },
 
   // Empty state
   emptyState: { paddingVertical: 20, backgroundColor: 'transparent' },
@@ -567,10 +870,71 @@ const styles = StyleSheet.create({
 
   // Pick button
   pickBtn: {
-    backgroundColor: '#2f95dc',
+    backgroundColor: ACCENT,
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 10,
   },
   pickBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+
+  // Playlist modal — light themed card
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    width: '100%',
+    maxWidth: 420,
+    maxHeight: '70%',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 12,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 12,
+  },
+  modalTitle: { fontSize: 16, fontWeight: '700', color: '#222' },
+  modalDivider: {
+    height: 1,
+    backgroundColor: '#eee',
+    marginHorizontal: 18,
+  },
+  trackList: { maxHeight: 340 },
+  trackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#f0f0f0',
+  },
+  trackRowActive: {
+    backgroundColor: '#f0f7ff',
+  },
+  trackNum: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#aaa',
+    width: 24,
+    textAlign: 'center',
+  },
+  trackIcon: { width: 24, textAlign: 'center' },
+  trackName: { fontSize: 14, color: '#444', flex: 1, marginLeft: 10 },
+  trackNameActive: { color: ACCENT, fontWeight: '600' },
+  removeBtn: { padding: 6, marginLeft: 8 },
+  emptyPlaylist: { padding: 40, alignItems: 'center' },
+  emptyPlaylistText: { color: '#aaa', fontSize: 14 },
 });
