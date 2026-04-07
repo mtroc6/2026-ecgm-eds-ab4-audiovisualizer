@@ -12,6 +12,7 @@ export function useAudioEngine() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bpm, setBpm] = useState(0);
+  const [didJustFinish, setDidJustFinish] = useState(false);
 
   const frequencyDataRef = useRef<number[]>(new Array(NUM_BANDS).fill(0));
 
@@ -111,6 +112,7 @@ export function useAudioEngine() {
 
   const loadAudio = useCallback(
     (uri: string) => {
+      setDidJustFinish(false);
       const { ctx, analyser } = getOrCreateContext();
 
       if (sourceRef.current) {
@@ -144,6 +146,7 @@ export function useAudioEngine() {
 
       audio.addEventListener('ended', () => {
         setIsPlaying(false);
+        setDidJustFinish(true);
         cancelAnimationFrame(rafRef.current);
         frequencyDataRef.current = new Array(NUM_BANDS).fill(0);
       });
@@ -200,6 +203,7 @@ export function useAudioEngine() {
     isPlaying,
     currentTime,
     duration,
+    didJustFinish,
     bpm,
     frequencyDataRef,
     loadAudio,

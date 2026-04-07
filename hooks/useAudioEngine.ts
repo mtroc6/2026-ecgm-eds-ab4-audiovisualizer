@@ -74,6 +74,7 @@ export function useAudioEngine() {
     isPlaying: status.playing,
     currentTime: status.currentTime,
     duration: status.duration,
+    didJustFinish: (status as any).didJustFinish ?? false,
     bpm: 0, // Not available on native without a native FFT module
     frequencyDataRef,
     loadAudio,
