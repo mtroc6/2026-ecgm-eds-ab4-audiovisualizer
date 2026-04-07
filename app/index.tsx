@@ -2,7 +2,7 @@ import Slider from '@react-native-community/slider';
 import * as DocumentPicker from 'expo-document-picker';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Modal, Platform, Pressable, View as RNView, ScrollView, StyleSheet } from 'react-native';
+import { Modal, Platform, Pressable, View as RNView, ScrollView, StyleSheet, TextInput } from 'react-native';
 import Animated, {
     Easing,
     useAnimatedStyle,
@@ -12,11 +12,11 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import MusicInfo from 'expo-music-info-2';
-import { Text, View, useThemeColor } from '@/components/Themed';
+import { Text, View } from '@/components/Themed';
 import { useColorScheme } from '@/components/useColorScheme';
 import { useAudioEngine } from '@/hooks/useAudioEngine';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import MusicInfo from 'expo-music-info-2';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -210,39 +210,75 @@ function PlaylistModal({ visible, tracks, currentIndex, onClose, onSelectTrack, 
   onRemoveTrack: (index: number) => void;
   dark: boolean;
 }) {
+  const [search, setSearch] = useState('');
   const m = dark ? modalDark : modalLight;
+
+  const filtered = search.trim()
+    ? tracks.map((t, i) => ({ track: t, originalIndex: i })).filter(({ track }) => {
+        const q = search.toLowerCase();
+        return track.name.toLowerCase().includes(q) || (track.artist?.toLowerCase().includes(q));
+      })
+    : tracks.map((t, i) => ({ track: t, originalIndex: i }));
+
+  const handleClose = () => { setSearch(''); onClose(); };
+
   return (
-    <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      <Pressable style={styles.modalOverlay} onPress={onClose}>
+    <Modal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
+      <Pressable style={styles.modalOverlay} onPress={handleClose}>
         <Pressable style={[styles.modalCard, { backgroundColor: m.bg }]} onPress={(e) => e.stopPropagation()}>
           <RNView style={[styles.modalHeader, { backgroundColor: m.bg }]}>
             <Text style={[styles.modalTitle, { color: m.title }]}>
               Playlist ({tracks.length})
             </Text>
-            <Pressable onPress={onClose} hitSlop={12}>
+            <Pressable onPress={handleClose} hitSlop={12}>
               <Ionicons name="close" size={24} color={m.dim} />
             </Pressable>
           </RNView>
+
+          {/* Search bar */}
+          {tracks.length > 0 && (
+            <RNView style={[styles.searchRow, { backgroundColor: m.bg }]}>
+              <Ionicons name="search" size={16} color={m.dim} />
+              <TextInput
+                style={[styles.searchInput, { color: m.title, borderColor: m.divider }]}
+                placeholder="Search tracks..."
+                placeholderTextColor={m.dim}
+                value={search}
+                onChangeText={setSearch}
+                autoCorrect={false}
+              />
+              {search.length > 0 && (
+                <Pressable onPress={() => setSearch('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={18} color={m.dim} />
+                </Pressable>
+              )}
+            </RNView>
+          )}
+
           <RNView style={[styles.modalDivider, { backgroundColor: m.divider }]} />
 
           {tracks.length === 0 ? (
             <RNView style={[styles.emptyPlaylist, { backgroundColor: m.bg }]}>
               <Text style={[styles.emptyPlaylistText, { color: m.dim }]}>No tracks added yet</Text>
             </RNView>
+          ) : filtered.length === 0 ? (
+            <RNView style={[styles.emptyPlaylist, { backgroundColor: m.bg }]}>
+              <Text style={[styles.emptyPlaylistText, { color: m.dim }]}>No results</Text>
+            </RNView>
           ) : (
             <ScrollView style={[styles.trackList, { backgroundColor: m.bg }]} showsVerticalScrollIndicator={false}>
-              {tracks.map((track, i) => {
-                const active = i === currentIndex;
+              {filtered.map(({ track, originalIndex }) => {
+                const active = originalIndex === currentIndex;
                 return (
                   <Pressable
                     key={track.id}
                     style={[styles.trackRow, { borderBottomColor: m.divider }, active && { backgroundColor: m.activeRow }]}
-                    onPress={() => { onSelectTrack(i); onClose(); }}
+                    onPress={() => { onSelectTrack(originalIndex); handleClose(); }}
                   >
                     {active ? (
                       <Ionicons name="play" size={14} color={ACCENT} style={styles.trackIcon} />
                     ) : (
-                      <Text style={[styles.trackNum, { color: m.dim }]}>{i + 1}</Text>
+                      <Text style={[styles.trackNum, { color: m.dim }]}>{originalIndex + 1}</Text>
                     )}
                     <RNView style={[styles.trackTextCol, { backgroundColor: 'transparent' }]}>
                       <Text
@@ -256,7 +292,7 @@ function PlaylistModal({ visible, tracks, currentIndex, onClose, onSelectTrack, 
                       )}
                     </RNView>
                     <Pressable
-                      onPress={(e) => { e.stopPropagation(); onRemoveTrack(i); }}
+                      onPress={(e) => { e.stopPropagation(); onRemoveTrack(originalIndex); }}
                       hitSlop={10}
                       style={styles.removeBtn}
                     >
@@ -308,6 +344,11 @@ export default function VisualizerScreen() {
   const [visMode, setVisMode] = useState<VisMode>('bars');
   const [colorScheme, setColorScheme] = useState<ColorScheme>('colorful');
   const [waveKey, setWaveKey] = useState(0);
+
+  // Sleep timer state
+  const [sleepMinutes, setSleepMinutes] = useState(0);
+  const [sleepRemaining, setSleepRemaining] = useState(0);
+  const sleepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const currentTrack = tracks[currentIndex] ?? null;
   const currentTime = isSeeking ? seekValue : engine.currentTime;
@@ -488,6 +529,57 @@ export default function VisualizerScreen() {
 
   const repeatActive = repeat !== 'none';
 
+  // ── Sleep timer ──
+
+  const SLEEP_PRESETS = [15, 30, 60];
+
+  const startSleepTimer = (minutes: number) => {
+    cancelSleepTimer();
+    setSleepMinutes(minutes);
+    setSleepRemaining(minutes * 60);
+    sleepTimerRef.current = setInterval(() => {
+      setSleepRemaining(prev => {
+        if (prev <= 1) {
+          cancelSleepTimer();
+          engine.pause();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const cancelSleepTimer = () => {
+    if (sleepTimerRef.current) {
+      clearInterval(sleepTimerRef.current);
+      sleepTimerRef.current = null;
+    }
+    setSleepMinutes(0);
+    setSleepRemaining(0);
+  };
+
+  const cycleSleepTimer = () => {
+    if (sleepMinutes === 0) {
+      startSleepTimer(SLEEP_PRESETS[0]);
+    } else {
+      const idx = SLEEP_PRESETS.indexOf(sleepMinutes);
+      if (idx < SLEEP_PRESETS.length - 1) {
+        startSleepTimer(SLEEP_PRESETS[idx + 1]);
+      } else {
+        cancelSleepTimer();
+      }
+    }
+  };
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => { if (sleepTimerRef.current) clearInterval(sleepTimerRef.current); };
+  }, []);
+
+  const sleepLabel = sleepRemaining > 0
+    ? `${Math.floor(sleepRemaining / 60)}:${(sleepRemaining % 60).toString().padStart(2, '0')}`
+    : '';
+
   return (
     <View style={styles.screen}>
       <SafeAreaView style={styles.safe}>
@@ -631,6 +723,15 @@ export default function VisualizerScreen() {
               >
                 <Ionicons name="repeat" size={16} color={repeatActive ? ACCENT : isDark ? '#888' : '#999'} />
                 {repeat === 'one' && <Text style={styles.repeatOneLabel}>1</Text>}
+              </Pressable>
+
+              <Pressable
+                style={[styles.secBtn, { borderColor }, sleepRemaining > 0 && styles.secBtnActive]}
+                onPress={cycleSleepTimer}
+                onLongPress={cancelSleepTimer}
+              >
+                <Ionicons name="timer-outline" size={16} color={sleepRemaining > 0 ? ACCENT : isDark ? '#888' : '#999'} />
+                {sleepRemaining > 0 && <Text style={styles.sleepLabel}>{sleepLabel}</Text>}
               </Pressable>
 
               <Pressable
@@ -899,6 +1000,7 @@ const styles = StyleSheet.create({
   },
   secBtnActive: { borderColor: ACCENT, backgroundColor: ACCENT_DIM },
   repeatOneLabel: { fontSize: 10, fontWeight: '800', color: ACCENT },
+  sleepLabel: { fontSize: 11, fontWeight: '700', color: ACCENT },
   playlistBtn: { borderColor: ACCENT_DIM },
   playlistBtnText: { fontSize: 12, fontWeight: '600', color: ACCENT },
 
@@ -955,6 +1057,21 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
   },
   modalTitle: { fontSize: 16, fontWeight: '700', color: '#222' },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderRadius: 8,
+  },
   modalDivider: {
     height: 1,
     backgroundColor: '#eee',
